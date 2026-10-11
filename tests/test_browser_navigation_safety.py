@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
-
 from services.browser import automation
 
 
