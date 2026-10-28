@@ -24,6 +24,7 @@ from models.preference import PreferenceSignal
 from models.user import User
 from libs.exceptions import LLMUnavailableError
 from services.agent.state import AgentContext
+from services.sqlite_migrations import upgrade_sqlite
 
 TEST_EMAIL = f"test-{uuid.uuid4().hex[:8]}@opentutor.dev"
 
@@ -47,8 +48,7 @@ async def client():
         expire_on_commit=False,
     )
 
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await upgrade_sqlite(test_engine)
 
     async def _override_get_db():
         async with test_session_factory() as session:

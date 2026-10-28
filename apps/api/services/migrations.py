@@ -73,16 +73,45 @@ def summarize_migration_state(
 
 
 def inspect_database_migrations(connection) -> MigrationState:
-    # SQLite local mode is migration-ready by design.
-    # We bootstrap schema via SQLAlchemy create_all() and do not require Alembic
-    # stamping as a runtime blocker for local single-user beta startup.
-    return MigrationState(
-        migration_status="ready",
-        schema_ready=True,
-        migration_required=False,  # SQLite local mode never needs Alembic
-        alembic_version_present=False,
-        current_revisions=[],
-        expected_revisions=[],
+    if connection.dialect.name == "sqlite":
+        from services.sqlite_migrations import (
+            REVISION,
+            current_revision,
+            schema_changes,
+        )
+
+        missing, rebuild, indexes = schema_changes(connection)
+        revision = current_revision(connection)
+        ready = not (missing or rebuild or indexes) and revision == REVISION
+        return MigrationState(
+            migration_status=(
+                "ready"
+                if ready
+                else "schema_missing"
+                if "users" in missing
+                else "out_of_date"
+            ),
+            schema_ready=ready,
+            migration_required=not ready,
+            alembic_version_present=False,
+            current_revisions=[revision] if revision else [],
+            expected_revisions=[REVISION],
+        )
+    tables = sa.inspect(connection).get_table_names()
+    heads = (
+        [
+            row[0]
+            for row in connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            )
+        ]
+        if "alembic_version" in tables
+        else []
+    )
+    return summarize_migration_state(
+        table_names=tables,
+        current_heads=heads,
+        expected_heads=get_expected_migration_heads(),
     )
 
 
@@ -107,13 +136,18 @@ def bootstrap_alembic_version_table(connection) -> list[str]:
 
     if "alembic_version" not in table_names:
         connection.execute(
-            sa.text("CREATE TABLE alembic_version (version_num VARCHAR(64) NOT NULL PRIMARY KEY)")
+            sa.text(
+                "CREATE TABLE alembic_version "
+                "(version_num VARCHAR(64) NOT NULL PRIMARY KEY)"
+            )
         )
         existing_heads: set[str] = set()
     else:
         existing_heads = {
             str(row[0])
-            for row in connection.execute(sa.text("SELECT version_num FROM alembic_version"))
+            for row in connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            )
             if row[0]
         }
         if existing_heads:
