@@ -58,6 +58,8 @@ interface ChatState {
   generatedQuizError: string | null;
   isStreaming: boolean;
   isLoadingSessions: boolean;
+  _historyRequestId: number;
+  _sessionsRequestId: number;
   error: string | null;
   errorCategory: "rate_limit" | "auth_error" | "timeout" | "llm_unavailable" | "generic" | null;
   /** True when the backend is using the mock LLM fallback (no real API key configured). */
@@ -135,6 +137,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   generatedQuizError: null,
   isStreaming: false,
   isLoadingSessions: false,
+  _historyRequestId: 0,
+  _sessionsRequestId: 0,
   error: null,
   errorCategory: null,
   isMockLlm: false,
@@ -251,11 +255,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       handler(action);
     }
   },
-  setCourseContext: (courseId) =>
+  setCourseContext: (courseId) => {
+    if (get().activeCourseId === courseId) return;
+    get().abortStream();
     set((s) => {
       const next = { ...s, activeCourseId: courseId };
-      return { activeCourseId: courseId, ...deriveActive(next), error: null, isMockLlm: false };
-    }),
+      return {
+        activeCourseId: courseId, ...deriveActive(next), error: null, isMockLlm: false,
+        _historyRequestId: s._historyRequestId + 1,
+        _sessionsRequestId: s._sessionsRequestId + 1,
+        isLoadingSessions: false,
+      };
+    });
+  },
   loadSessions: async (courseId, options) => {
     const cacheKey = `chat:sessions:${courseId}`;
 
@@ -268,9 +280,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return;
     }
 
-    set({ isLoadingSessions: true, error: null });
+    const requestId = get()._sessionsRequestId + 1;
+    const historyRequestId = get()._historyRequestId;
+    set({ _sessionsRequestId: requestId, isLoadingSessions: true, error: null });
     try {
       const sessions = await listChatSessions(courseId);
+      if (get()._sessionsRequestId !== requestId) return;
       ttlCache.set(cacheKey, sessions, SESSIONS_TTL_MS);
       set((s) => ({
         sessionsByCourse: { ...s.sessionsByCourse, [courseId]: sessions },
@@ -278,19 +293,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       const currentSessionId = get().sessionIds[courseId];
       const shouldRestoreLatest =
-        options?.restoreLatest && !currentSessionId && sessions.length > 0 && (get().messagesByCourse[courseId]?.length ?? 0) === 0;
+        options?.restoreLatest && get().activeCourseId === courseId &&
+        get()._historyRequestId === historyRequestId && !currentSessionId &&
+        sessions.length > 0 && (get().messagesByCourse[courseId]?.length ?? 0) === 0;
 
       if (shouldRestoreLatest) {
         await get().loadSessionMessages(courseId, sessions[0].id);
       }
     } catch (e) {
-      set({ error: (e as Error).message });
+      if (get()._sessionsRequestId === requestId) set({ error: (e as Error).message });
     } finally {
-      set({ isLoadingSessions: false });
+      if (get()._sessionsRequestId === requestId) set({ isLoadingSessions: false });
     }
   },
   loadSessionMessages: async (courseId, sessionId) => {
-    set({ isLoadingSessions: true, error: null });
+    get().setCourseContext(courseId);
+    get().abortStream();
+    const requestId = get()._historyRequestId + 1;
+    const isCurrent = () => get()._historyRequestId === requestId && get().activeCourseId === courseId;
+    set({
+      _historyRequestId: requestId,
+      _sessionsRequestId: get()._sessionsRequestId + 1,
+      isLoadingSessions: true,
+      error: null,
+    });
     try {
       const pageSize = 200;
       const persistedMessages = [];
@@ -302,6 +328,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           limit: pageSize,
           offset,
         });
+        if (!isCurrent()) return;
         totalMessages = result.session.message_count;
         persistedMessages.push(...result.messages);
         if (result.messages.length === 0) {
@@ -319,21 +346,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
       set((s) => {
         const nextMBC = { ...s.messagesByCourse, [courseId]: hydratedMessages };
-      const next = { ...s, activeCourseId: courseId, messagesByCourse: nextMBC };
-      return {
-        activeCourseId: courseId,
-        messagesByCourse: nextMBC,
-        sessionIds: { ...s.sessionIds, [courseId]: sessionId },
+        const next = { ...s, messagesByCourse: nextMBC };
+        return {
+          messagesByCourse: nextMBC,
+          sessionIds: { ...s.sessionIds, [courseId]: sessionId },
           ...deriveActive(next),
         };
       });
     } catch (e) {
-      set({ error: (e as Error).message });
+      if (isCurrent()) set({ error: (e as Error).message });
     } finally {
-      set({ isLoadingSessions: false });
+      if (isCurrent()) set({ isLoadingSessions: false });
     }
   },
-  startNewSession: (courseId) =>
+  startNewSession: (courseId) => {
+    get().abortStream();
     set((s) => {
       const nextMBC = { ...s.messagesByCourse, [courseId]: [] };
       const nextDrafts = { ...s.generatedQuizDraftByCourse, [courseId]: null };
@@ -346,6 +373,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         generatedQuizErrorByCourse: nextDraftErrors,
       };
       return {
+        _historyRequestId: s._historyRequestId + 1,
+        _sessionsRequestId: s._sessionsRequestId + 1,
+        isLoadingSessions: false,
         activeCourseId: courseId,
         messagesByCourse: nextMBC,
         generatedQuizDraftByCourse: nextDrafts,
@@ -356,12 +386,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...deriveActive(next),
         error: null,
       };
-    }),
+    });
+  },
 
   sendMessage: async (courseId, content, options?) => {
     if (get().activeCourseId !== courseId) {
       get().setCourseContext(courseId);
     }
+    set((s) => ({
+      _historyRequestId: s._historyRequestId + 1,
+      _sessionsRequestId: s._sessionsRequestId + 1,
+      isLoadingSessions: false,
+    }));
 
     // ── Interrupt handling: if already streaming, abort current stream and
     //    finalize the partial assistant message before starting a new one.
@@ -437,11 +473,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const prev = get()._abortController;
     if (prev) prev.abort();
     const controller = new AbortController();
+    const isCurrent = () => get()._abortController === controller &&
+      !controller.signal.aborted && get().activeCourseId === courseId;
     const slowAnalyzingTimer = setTimeout(() => {
-      set((s) => (s.isStreaming ? { slowState: "analyzing" } : {}));
+      if (isCurrent()) set({ slowState: "analyzing" });
     }, 8_000);
     const slowDelayedTimer = setTimeout(() => {
-      set((s) => (s.isStreaming ? { slowState: "delayed" } : {}));
+      if (isCurrent()) set({ slowState: "delayed" });
     }, 15_000);
     set({
       _abortController: controller,
@@ -466,6 +504,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         blockTypes: wsState.spaceLayout?.blocks?.map((b) => b.type),
         dismissedBlockTypes: getDismissHistory(courseId),
       })) {
+        if (!isCurrent()) return;
         if (event.type === "content") {
           assistantContent += event.content;
           if (!receivedFirstToken) {
@@ -503,7 +542,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (prevTimer) clearTimeout(prevTimer);
           set({ toolStatus: { tool: event.tool, status: event.status, explanation: event.explanation }, _toolStatusTimer: null });
           if (event.status === "complete") {
-            const timer = setTimeout(() => set({ toolStatus: null, _toolStatusTimer: null }), 1500);
+            const timer = setTimeout(() => {
+              if (isCurrent()) set({ toolStatus: null, _toolStatusTimer: null });
+            }, 1500);
             set({ _toolStatusTimer: timer });
           }
         } else if (event.type === "tool_progress") {
@@ -513,7 +554,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         } else if (event.type === "clarify") {
           set({ clarifyOptions: event.clarify });
         } else if (event.type === "block_update") {
-          await applyBlockDecisions(event);
+          await applyBlockDecisions(event, isCurrent);
         } else if (event.type === "replace") {
           assistantContent = event.content;
           if (!receivedFirstToken && event.content.trim().length > 0) {
@@ -536,6 +577,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         } else if (event.type === "warning") {
           // Show SSE warnings (e.g. persistence failure) as toast
           const { toast } = await import("sonner");
+          if (!isCurrent()) return;
           toast.warning(event.message);
           set({ latestWarning: { type: event.warningType, message: event.message } });
         } else if (event.type === "done") {
@@ -591,11 +633,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
         }
       }
+      if (!isCurrent()) return;
       // Invalidate session cache so loadSessions fetches the fresh list
       // (a new session may have been created during the exchange).
       ttlCache.invalidate(`chat:sessions:${courseId}`);
       await get().loadSessions(courseId);
     } catch (e) {
+      if (!isCurrent()) return;
       // Suppress abort errors caused by user interrupt — not a real failure.
       if (e instanceof DOMException && e.name === "AbortError") {
         return;
@@ -617,22 +661,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         };
       });
     } finally {
-      const t = get()._toolStatusTimer;
-      if (t) clearTimeout(t);
-      const analyzingTimer = get()._slowAnalyzingTimer;
-      const delayedTimer = get()._slowDelayedTimer;
-      if (analyzingTimer) clearTimeout(analyzingTimer);
-      if (delayedTimer) clearTimeout(delayedTimer);
-      set({
-        isStreaming: false,
-        toolStatus: null,
-        _abortController: null,
-        _toolStatusTimer: null,
-        _slowAnalyzingTimer: null,
-        _slowDelayedTimer: null,
-        streamPhase: null,
-        slowState: null,
-      });
+      clearTimeout(slowAnalyzingTimer);
+      clearTimeout(slowDelayedTimer);
+      if (get()._abortController === controller) {
+        const t = get()._toolStatusTimer;
+        if (t) clearTimeout(t);
+        const analyzingTimer = get()._slowAnalyzingTimer;
+        const delayedTimer = get()._slowDelayedTimer;
+        if (analyzingTimer) clearTimeout(analyzingTimer);
+        if (delayedTimer) clearTimeout(delayedTimer);
+        set({
+          isStreaming: false,
+          toolStatus: null,
+          _abortController: null,
+          _toolStatusTimer: null,
+          _slowAnalyzingTimer: null,
+          _slowDelayedTimer: null,
+          streamPhase: null,
+          slowState: null,
+        });
+      }
     }
   },
 
