@@ -32,9 +32,10 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
-vi.mock("@/lib/i18n-context", () => ({
-  useT: () => (key: string) => key,
-}));
+vi.mock("@/lib/i18n-context", () => {
+  const translate = (key: string) => key;
+  return { useT: () => translate };
+});
 
 vi.mock("sonner", () => ({
   toast: {
@@ -66,9 +67,10 @@ vi.mock("@/components/shared/ai-feature-blocked", () => ({
   AiFeatureBlocked: () => <div data-testid="ai-blocked" />,
 }));
 
-vi.mock("./use-quiz-persistence", () => ({
-  useQuizPersistence: () => ({ save: vi.fn(), load: vi.fn().mockReturnValue(null), clear: vi.fn() }),
-}));
+vi.mock("./use-quiz-persistence", () => {
+  const persistence = { save: vi.fn(), load: vi.fn().mockReturnValue(null), clear: vi.fn() };
+  return { useQuizPersistence: () => persistence };
+});
 
 describe("QuizView", () => {
   beforeEach(() => {

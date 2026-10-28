@@ -13,6 +13,7 @@ from services.llm.errors import classify_llm_error, describe_llm_error
     ("[WinError 10061] No connection could be made", "connection_refused"),
     ("all connection attempts failed", "connection_refused"),
     ("Cannot connect to host localhost:11434", "connection_refused"),
+    ("unreachable", "connection_refused"),
     ("ReadTimeout: timed out", "timeout"),
     ("APITimeoutError: Request timeout", "timeout"),
     ("Error code: 401 - Incorrect API key provided", "auth"),
@@ -22,6 +23,7 @@ from services.llm.errors import classify_llm_error, describe_llm_error
     ("NotFoundError: The model `gpt-9` does not exist or you do not have access to it", "model_not_found"),
     ("Error code: 404 - unknown model", "model_not_found"),
     ("Error code: 429 - Rate limit reached", "rate_limit"),
+    ("rate_limited", "rate_limit"),
     ("insufficient_quota: You exceeded your current quota", "rate_limit"),
     ("getaddrinfo failed", "dns"),
     ("Name or service not known", "dns"),
@@ -46,12 +48,12 @@ def test_connection_refused_names_provider_url_and_start_hint():
     assert "ollama" in msg
     assert "http://localhost:11434" in msg
     assert "ollama serve" in msg
-    assert "Connection refused" in msg  # Raw error preserved for debugging
+    assert "connection_refused" in msg
 
 
 def test_timeout_suggests_model_size_or_load():
     msg = describe_llm_error("timed out", provider="vllm", base_url="http://gpu:8000/v1", model="qwen-72b")
-    assert "qwen-72b" in msg and "http://gpu:8000/v1" in msg
+    assert "qwen-72b" in msg and "http://gpu:8000" in msg
     assert "smaller model" in msg or "overloaded" in msg
 
 
@@ -76,9 +78,25 @@ def test_model_not_found_cloud_suggests_settings_check():
     assert "gpt-9" in msg and "model name" in msg
 
 
-def test_unknown_error_still_names_provider_and_keeps_raw():
+def test_unknown_error_names_provider_without_echoing_raw_body():
     msg = describe_llm_error("kaboom", provider="groq", base_url="https://api.groq.com")
-    assert "groq" in msg and "kaboom" in msg
+    assert "groq" in msg and "category: unknown" in msg
+    assert "kaboom" not in msg
+
+
+@pytest.mark.parametrize("cause,category", [("401 invalid API key", "auth"), ("Connection refused", "connection_refused")])
+def test_diagnostics_hide_credentials_and_request_content(caplog, cause, category):
+    client = _FakeClient()
+    client.base_url = "https://operator:synthetic-password@gateway.example/token-in-path?api_key=synthetic-query#private-fragment"
+    raw = cause + " synthetic-provider-key; request contains private student text"
+    for _ in range(3):
+        client.mark_unhealthy(raw)
+    combined = client.last_error_detail + caplog.text
+    if category == "connection_refused":
+        assert "gateway.example" in combined
+    assert f"category: {category}" in combined
+    for private in ["operator", "synthetic-password", "token-in-path", "synthetic-query", "private-fragment", "synthetic-provider-key", "private student text"]:
+        assert private not in combined
 
 
 # ── Circuit breaker integration ──
@@ -126,3 +144,17 @@ def test_router_unhealthy_error_includes_per_provider_reasons():
     msg = str(exc.value)
     assert "All LLM providers are unhealthy" in msg
     assert "ollama serve" in msg  # The actionable diagnostic surfaced
+
+
+@pytest.mark.asyncio
+async def test_actual_openai_compatible_client_reports_its_sdk_endpoint():
+    from services.llm.providers.openai_client import OpenAIClient
+
+    client = OpenAIClient("synthetic-key", "test-model", "http://localhost:11434/v1", name="ollama")
+    try:
+        client.mark_unhealthy("unreachable")
+        assert "http://localhost:11434" in client.last_error_detail
+        assert "ollama serve" in client.last_error_detail
+        assert "synthetic-key" not in client.last_error_detail
+    finally:
+        await client.client.close()

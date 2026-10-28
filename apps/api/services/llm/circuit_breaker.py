@@ -61,10 +61,15 @@ class CircuitBreakerMixin:
         self._consecutive_failures += 1
         # Every provider failure funnels through here — record an actionable
         # diagnostic so "all providers unhealthy" errors can say *why*.
+        endpoint = (
+            getattr(self, "base_url", None)
+            or getattr(self, "api_base", None)
+            or getattr(getattr(self, "client", None), "base_url", None)
+        )
         self.last_error_detail = describe_llm_error(
             error,
             provider=self.provider_name,
-            base_url=getattr(self, "base_url", None),
+            base_url=str(endpoint) if endpoint is not None else None,
             model=getattr(self, "model", None),
         )
 
@@ -74,14 +79,14 @@ class CircuitBreakerMixin:
             self._circuit_open_time = time.time()
             logger.error(
                 f"Circuit OPEN for {self.provider_name} after "
-                f"{self._consecutive_failures} failures: {error}"
+                f"{self._consecutive_failures} failures: {self.last_error_detail}"
             )
             return
 
         idx = min(self._consecutive_failures - 1, len(COOLDOWN_STEPS) - 1)
         cooldown = COOLDOWN_STEPS[idx]
         self._cooldown_until = time.time() + cooldown
-        logger.warning(f"LLM {self.provider_name} unhealthy: {error}, cooldown {cooldown}s")
+        logger.warning(f"LLM {self.provider_name} unhealthy: {self.last_error_detail}, cooldown {cooldown}s")
 
     def mark_healthy(self):
         self._healthy = True

@@ -28,6 +28,16 @@ def _ctx(message: str) -> AgentContext:
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_signal_collection():
+    # These tests exercise orchestration, not SQL result objects; a bare
+    # AsyncMock session otherwise fabricates unawaited scalar coroutines.
+    with patch("services.agent.signals.collect_signals", AsyncMock(return_value=[])), \
+         patch("services.block_decision.preference.compute_block_preferences", AsyncMock(return_value=None)), \
+         patch("services.block_decision.engine.compute_block_decisions", AsyncMock(return_value={"add": [], "remove": []})):
+        yield
+
+
 # ── Intent classification → agent routing ──
 
 

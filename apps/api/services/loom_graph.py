@@ -9,7 +9,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.knowledge_graph import KnowledgeNode, KnowledgeEdge, ConceptMastery

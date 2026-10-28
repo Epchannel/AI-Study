@@ -13,6 +13,8 @@ without importing any provider SDK.
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit, urlunsplit
+
 # Env var holding the API key, per cloud provider (used in auth hints)
 _KEY_ENV = {
     "openai": "OPENAI_API_KEY",
@@ -54,7 +56,7 @@ def classify_llm_error(error: BaseException | str) -> str:
     if any(p in text for p in (
         "connection refused", "connecterror", "connection error",
         "errno 111", "winerror 10061", "all connection attempts failed",
-        "cannot connect to host", "connection reset",
+        "cannot connect to host", "connection reset", "unreachable",
     )):
         return "connection_refused"
     if any(p in text for p in ("timed out", "timeout", "deadline exceeded")):
@@ -71,7 +73,7 @@ def classify_llm_error(error: BaseException | str) -> str:
         "notfounderror",
     )) or ("404" in text and "model" in text):
         return "model_not_found"
-    if any(p in text for p in ("429", "rate limit", "ratelimit", "quota", "overloaded")):
+    if any(p in text for p in ("429", "rate limit", "rate_limit", "ratelimit", "quota", "overloaded")):
         return "rate_limit"
     return "unknown"
 
@@ -85,13 +87,25 @@ def describe_llm_error(
 ) -> str:
     """Return an actionable, user-facing message for an LLM failure.
 
-    The full technical error is appended in brackets so support threads keep
-    the raw signal; callers should still log the original exception.
+    Provider exception bodies may echo credentials or submitted content. Only
+    the classified cause is exposed; endpoint credentials and query parameters
+    are omitted as well.
     """
     category = classify_llm_error(error)
-    endpoint = f" at {base_url}" if base_url else ""
+    endpoint = ""
+    if base_url:
+        try:
+            parsed = urlsplit(base_url)
+            host = parsed.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
+            if parsed.port is not None:
+                host = f"{host}:{parsed.port}"
+            if parsed.scheme in {"http", "https"} and host:
+                endpoint = " at " + urlunsplit((parsed.scheme, host, "", "", ""))
+        except ValueError:
+            endpoint = " at the configured endpoint"
     model_part = f" '{model}'" if model else ""
-    raw = _text_of(error)
 
     if category == "connection_refused":
         hint = _LOCAL_START_HINTS.get(
@@ -122,6 +136,6 @@ def describe_llm_error(
     elif category == "rate_limit":
         msg = f"{provider} is rate-limiting or out of quota — wait and retry, or check the plan/quota for this key."
     else:
-        msg = f"{provider}{endpoint} request failed — see the technical error below and the server logs."
+        msg = f"{provider}{endpoint} request failed — check the provider settings and server logs."
 
-    return f"{msg} [{raw}]"
+    return f"{msg} [category: {category}]"

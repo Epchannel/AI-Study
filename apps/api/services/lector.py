@@ -17,7 +17,7 @@ Usage:
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -341,7 +341,7 @@ async def record_review_outcome(
         select(KnowledgeNode).where(KnowledgeNode.id == concept_id)
     )
     node = node_result.scalar_one_or_none()
-    if node:
+    if node and recalled_correctly:
         from services.loom_mastery import _consolidate_mastered_concepts
         await _consolidate_mastered_concepts(db, user_id, node.course_id, concept_id)
 

@@ -206,3 +206,26 @@ async def test_e2e_review_outcome_updates_fsrs_schedule(db, user_id, course_id):
     assert m.stability_days > 5.0
     assert m.next_review_at is not None
     assert m.practice_count == 4
+
+
+@pytest.mark.asyncio
+async def test_failed_review_does_not_award_parent_consolidation(db, user_id, course_id):
+    parent = KnowledgeNode(id=uuid.uuid4(), course_id=course_id, name="Parent")
+    prerequisite = KnowledgeNode(id=uuid.uuid4(), course_id=course_id, name="Prerequisite")
+    db.add_all([parent, prerequisite])
+    await db.flush()
+    db.add(KnowledgeEdge(source_id=parent.id, target_id=prerequisite.id,
+                         relation_type="prerequisite", weight=1.0))
+    parent_mastery = ConceptMastery(user_id=user_id, knowledge_node_id=parent.id,
+                                    mastery_score=0.5, stability_days=2.0)
+    db.add_all([parent_mastery, ConceptMastery(
+        user_id=user_id, knowledge_node_id=prerequisite.id,
+        mastery_score=0.99, stability_days=8.0, practice_count=5,
+        correct_count=5, wrong_count=0,
+    )])
+    await db.commit()
+
+    # A failure can leave mastery above 0.85, but must not reward the parent.
+    await record_review_outcome(db, user_id, prerequisite.id, recalled_correctly=False)
+    await db.commit()
+    assert parent_mastery.mastery_score == pytest.approx(0.5)

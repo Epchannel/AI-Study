@@ -10,7 +10,6 @@ overdue / interval-floor / difficulty-clamp edges.
 from datetime import datetime, timedelta, timezone
 
 from services.spaced_repetition.fsrs import (
-    DEFAULT_W,
     FSRSCard,
     review_card,
     _initial_difficulty,
@@ -133,7 +132,6 @@ def test_difficulty_stays_clamped_under_repeated_easy():
 def test_same_day_second_review_inflates_less_than_spaced_review():
     # Two Good reviews 2 hours apart must grow stability less than the same
     # second review after 10 days (FSRS-5 same-day formula)
-    base = _review_state_card(stability=10.0)
     same_day, _ = review_card(_review_state_card(stability=10.0), rating=3, now=_NOW)
     same_day, _ = review_card(same_day, rating=3, now=_NOW + timedelta(hours=2))
 
