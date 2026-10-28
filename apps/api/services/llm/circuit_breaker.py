@@ -34,6 +34,7 @@ class CircuitBreakerMixin:
         self._consecutive_failures: int = 0
         self._circuit_open: bool = False
         self._circuit_open_time: float = 0
+        self.last_error_detail: str | None = None  # User-facing diagnostic of the last failure
 
     @property
     def is_healthy(self) -> bool:
@@ -43,7 +44,7 @@ class CircuitBreakerMixin:
                 self._circuit_open = False
                 self._healthy = True
                 self._consecutive_failures = 0
-                logger.info(f"Circuit breaker reset for {self.provider_name}")
+                logger.info("Circuit breaker reset for %s", type(self).__name__)
             else:
                 return False
 
@@ -54,23 +55,44 @@ class CircuitBreakerMixin:
 
     def mark_unhealthy(self, error: str):
         """Progressive cooldown + circuit breaker (openakita + circuitbreaker pattern)."""
+        from services.llm.errors import classify_llm_error, describe_llm_error
+
         self._healthy = False
         self._consecutive_failures += 1
+        # Every provider failure funnels through here — record an actionable
+        # diagnostic so "all providers unhealthy" errors can say *why*.
+        endpoint = (
+            getattr(self, "base_url", None)
+            or getattr(self, "api_base", None)
+            or getattr(getattr(self, "client", None), "base_url", None)
+        )
+        self.last_error_detail = describe_llm_error(
+            error,
+            provider=self.provider_name,
+            base_url=str(endpoint) if endpoint is not None else None,
+            model=getattr(self, "model", None),
+        )
+        # Public diagnostics retain useful configured names. Logs must not
+        # include those user-controlled strings or allow forged log lines.
+        category = classify_llm_error(error)
 
         # Circuit breaker: open after threshold
         if self._consecutive_failures >= CIRCUIT_OPEN_THRESHOLD:
             self._circuit_open = True
             self._circuit_open_time = time.time()
             logger.error(
-                f"Circuit OPEN for {self.provider_name} after "
-                f"{self._consecutive_failures} failures: {error}"
+                "Circuit OPEN for %s after %d failures (category: %s)",
+                type(self).__name__, self._consecutive_failures, category,
             )
             return
 
         idx = min(self._consecutive_failures - 1, len(COOLDOWN_STEPS) - 1)
         cooldown = COOLDOWN_STEPS[idx]
         self._cooldown_until = time.time() + cooldown
-        logger.warning(f"LLM {self.provider_name} unhealthy: {error}, cooldown {cooldown}s")
+        logger.warning(
+            "LLM %s unhealthy (category: %s), cooldown %ss",
+            type(self).__name__, category, cooldown,
+        )
 
     def mark_healthy(self):
         self._healthy = True

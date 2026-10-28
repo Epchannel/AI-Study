@@ -32,9 +32,10 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
-vi.mock("@/lib/i18n-context", () => ({
-  useT: () => (key: string) => key,
-}));
+vi.mock("@/lib/i18n-context", () => {
+  const translate = (key: string) => key;
+  return { useT: () => translate };
+});
 
 vi.mock("sonner", () => ({
   toast: {
@@ -66,9 +67,10 @@ vi.mock("@/components/shared/ai-feature-blocked", () => ({
   AiFeatureBlocked: () => <div data-testid="ai-blocked" />,
 }));
 
-vi.mock("./use-quiz-persistence", () => ({
-  useQuizPersistence: () => ({ save: vi.fn(), load: vi.fn().mockReturnValue(null), clear: vi.fn() }),
-}));
+vi.mock("./use-quiz-persistence", () => {
+  const persistence = { save: vi.fn(), load: vi.fn().mockReturnValue(null), clear: vi.fn() };
+  return { useQuizPersistence: () => persistence };
+});
 
 describe("QuizView", () => {
   beforeEach(() => {
@@ -176,5 +178,25 @@ describe("QuizView", () => {
     render(<QuizView courseId="test" />);
     await waitFor(() => screen.getByText("What color is the sky?"));
     expect(screen.getByText("Atmosphere")).toBeInTheDocument();
+  });
+
+  it("shows error state with retry when loading fails", async () => {
+    const { listProblems } = await import("@/lib/api");
+    vi.mocked(listProblems).mockRejectedValueOnce(new Error("network down"));
+
+    render(<QuizView courseId="test" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("quiz-load-error")).toBeInTheDocument();
+    });
+    // The failure must NOT masquerade as the "no quiz yet" empty state
+    expect(screen.queryByText("quiz.empty")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("network down")).toBeInTheDocument();
+
+    // Retry refetches (the default mock resolves) and renders the quiz
+    fireEvent.click(screen.getByText("quiz.retry"));
+    await waitFor(() => {
+      expect(screen.getByText("What color is the sky?")).toBeInTheDocument();
+    });
   });
 });
