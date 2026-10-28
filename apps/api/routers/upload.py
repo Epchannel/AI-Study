@@ -92,11 +92,12 @@ async def upload_file(
                 f"File content ({detected.mime}) does not match extension ({ext})"
             )
 
-    file_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
     os.makedirs(settings.upload_dir, exist_ok=True)
     safe_name = re.sub(r"[^\w.\-]", "_", os.path.basename(file.filename)) or "unnamed"
-    safe_name = safe_name[:255]
-    save_path = os.path.join(settings.upload_dir, f"{file_hash}_{safe_name}")
+    # Each attempt owns its source file, even when another course uploaded the
+    # same bytes. Content deduplication belongs to the ingestion pipeline.
+    safe_name = safe_name.encode("utf-8")[:200].decode("utf-8", errors="ignore")
+    save_path = os.path.join(settings.upload_dir, f"{uuid.uuid4().hex}_{safe_name}")
     await asyncio.to_thread(Path(save_path).write_bytes, file_bytes)
 
     try:
@@ -124,6 +125,11 @@ async def upload_file(
         except OSError:
             pass
         raise AppError(job.error_message or "Ingestion failed")
+
+    if job.file_path != save_path:
+        # A completed duplicate retains its original source. Remove only this
+        # attempt's unused copy after the transaction has succeeded.
+        Path(save_path).unlink(missing_ok=True)
 
     is_test_request = request is not None and hasattr(request.app.state, "test_session_factory")
     if (job.nodes_created or 0) > 0 and not is_test_request:
