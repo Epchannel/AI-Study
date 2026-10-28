@@ -18,9 +18,16 @@ async def _maybe_create_tables() -> None:
     if not settings.app_auto_create_tables:
         return
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Ensured database tables exist via Base.metadata.create_all()")
+    if engine.dialect.name == "sqlite":
+        from services.sqlite_migrations import upgrade_sqlite
+
+        backup = await upgrade_sqlite(engine)
+        if backup:
+            logger.info("Upgraded SQLite schema; pre-upgrade backup: %s", backup)
+    else:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database schema initialization completed")
 
 
 async def _maybe_bootstrap_migration_tracking() -> None:

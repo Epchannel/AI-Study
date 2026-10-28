@@ -27,9 +27,11 @@ export interface StreamEventHandlers {
  */
 export async function applyBlockDecisions(
   result: { operations: BlockUpdateOp[]; cognitiveState: CognitiveState; explanation: string; interventionIds?: Record<string, string> },
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   try {
     const { useWorkspaceStore } = await import("@/store/workspace");
+    if (!isCurrent()) return;
     const ws = useWorkspaceStore.getState();
 
     // Always persist cognitive state for the badge
@@ -90,6 +92,7 @@ export async function applyBlockDecisions(
       // Show adaptation toast with undo support
       try {
         const { showAdaptationToast } = await import("@/components/shared/adaptation-toast");
+        if (!isCurrent()) return;
         showAdaptationToast(result.explanation, result.operations, () => ws.undoLayout(), result.interventionIds);
       } catch (e) {
         console.warn("[BlockDecisions] Toast notification failed:", e);

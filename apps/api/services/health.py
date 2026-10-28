@@ -68,11 +68,14 @@ async def get_liveness() -> dict[str, Any]:
 
 
 async def get_readiness() -> dict[str, Any]:
-    """Readiness check – verifies DB and LLM are reachable."""
+    """Readiness requires a usable schema as well as reachable dependencies."""
     db_ok = False
+    migration_state = _default_migration_state()
     try:
         async with database_module.async_session() as db:
             await db.execute(text("SELECT 1"))
+            conn = await db.connection()
+            migration_state = await conn.run_sync(inspect_database_migrations)
         db_ok = True
     except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
         logger.warning("Readiness check: database unreachable: %s", exc)
@@ -81,8 +84,9 @@ async def get_readiness() -> dict[str, Any]:
     llm_ok = llm_runtime["status"] not in {"mock_fallback", "configuration_required"}
 
     return {
-        "ready": db_ok and llm_ok,
+        "ready": db_ok and migration_state.schema_ready and llm_ok,
         "database": "connected" if db_ok else "unreachable",
+        "schema_ready": migration_state.schema_ready,
         "llm_status": llm_runtime["status"],
     }
 

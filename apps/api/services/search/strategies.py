@@ -8,7 +8,7 @@ import json
 import logging
 import uuid
 
-from sqlalchemy import select, or_
+from sqlalchemy import case, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.content import CourseContentTree
@@ -41,9 +41,33 @@ async def keyword_search(
         for t in terms[:6]
     ]
 
+    # Rank all matches before limiting candidates. Otherwise an early weak
+    # match can exclude a later, much stronger match from Python reranking.
+    hit_score = sum(
+        case(
+            (
+                or_(
+                    func.instr(func.lower(CourseContentTree.title), t.lower()) > 0,
+                    func.instr(
+                        func.lower(func.coalesce(CourseContentTree.content, "")),
+                        t.lower(),
+                    )
+                    > 0,
+                ),
+                1,
+            ),
+            else_=0,
+        )
+        for t in terms
+    )
+    level_boost = case(
+        (CourseContentTree.level < 5, 1.0 - CourseContentTree.level * 0.1),
+        else_=0.5,
+    )
     result = await db.execute(
         select(CourseContentTree)
         .where(CourseContentTree.course_id == course_id, or_(*conditions))
+        .order_by((hit_score * level_boost).desc(), CourseContentTree.id)
         .limit(limit * 2)
     )
     nodes = result.scalars().all()
@@ -53,20 +77,21 @@ async def keyword_search(
         content_lower = (node.content or "").lower()
         title_lower = (node.title or "").lower()
         hit_count = sum(
-            1 for t in terms
-            if t.lower() in content_lower or t.lower() in title_lower
+            1 for t in terms if t.lower() in content_lower or t.lower() in title_lower
         )
         level_boost = max(0.5, 1.0 - node.level * 0.1)
-        scored.append({
-            "id": str(node.id),
-            "title": node.title,
-            "content": (node.content or "")[:1500],
-            "level": node.level,
-            "parent_id": str(node.parent_id) if node.parent_id else None,
-            "source_file": node.source_file,
-            "score": hit_count * level_boost,
-            "source": "keyword",
-        })
+        scored.append(
+            {
+                "id": str(node.id),
+                "title": node.title,
+                "content": (node.content or "")[:1500],
+                "level": node.level,
+                "parent_id": str(node.parent_id) if node.parent_id else None,
+                "source_file": node.source_file,
+                "score": hit_count * level_boost,
+                "source": "keyword",
+            }
+        )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:limit]
@@ -81,6 +106,7 @@ async def vector_search(
     """Cosine similarity search on content tree embeddings."""
     try:
         from services.embedding.registry import get_embedding_provider, is_noop_provider
+
         if is_noop_provider():
             return []  # Embeddings disabled; fall back to keyword search
         provider = get_embedding_provider()
@@ -90,8 +116,7 @@ async def vector_search(
         return []
 
     result = await db.execute(
-        select(CourseContentTree)
-        .where(
+        select(CourseContentTree).where(
             CourseContentTree.course_id == course_id,
             CourseContentTree.embedding.isnot(None),
         )
@@ -184,20 +209,23 @@ async def tree_search(
         for child in children:
             content_lower = (child.content or "").lower()
             hit_count = sum(
-                1 for t in query_terms
+                1
+                for t in query_terms
                 if t in content_lower or t in (child.title or "").lower()
             )
             if hit_count > 0 or len(children) <= 3:
-                results.append({
-                    "id": str(child.id),
-                    "title": f"{chapter.title} > {child.title}",
-                    "content": (child.content or "")[:1500],
-                    "level": child.level,
-                    "parent_id": str(child.parent_id) if child.parent_id else None,
-                    "source_file": child.source_file,
-                    "score": hit_count + 0.5,
-                    "source": "tree",
-                })
+                results.append(
+                    {
+                        "id": str(child.id),
+                        "title": f"{chapter.title} > {child.title}",
+                        "content": (child.content or "")[:1500],
+                        "level": child.level,
+                        "parent_id": str(child.parent_id) if child.parent_id else None,
+                        "source_file": child.source_file,
+                        "score": hit_count + 0.5,
+                        "source": "tree",
+                    }
+                )
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:limit]

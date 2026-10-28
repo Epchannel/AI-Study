@@ -4,6 +4,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
+from alembic.util import CommandError
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -45,17 +46,32 @@ async def run_async_migrations() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-    await connectable.dispose()
+    try:
+        if connectable.dialect.name == "sqlite":
+            from services.sqlite_migrations import upgrade_sqlite
+
+            # This path is a forward-only local upgrade, not an Alembic stamp
+            # or downgrade. Never mutate a database for an inspection command.
+            options = getattr(config, "cmd_opts", None)
+            command = getattr(options, "cmd", None)
+            if (
+                command is None
+                or command[0].__name__ != "upgrade"
+                or getattr(options, "revision", None) != "head"
+            ):
+                raise CommandError(
+                    "SQLite supports 'alembic upgrade head' only; "
+                    "inspect local schema status via /api/health."
+                )
+            await upgrade_sqlite(connectable)
+        else:
+            async with connectable.connect() as connection:
+                await connection.run_sync(do_run_migrations)
+    finally:
+        await connectable.dispose()
 
 
 def run_migrations_online() -> None:
-    # Guard: SQLite mode uses create_all(), not Alembic migrations
-    db_url = config.get_main_option("sqlalchemy.url", "")
-    if db_url.startswith("sqlite"):
-        print("SQLite mode detected — migrations skipped (tables created via create_all() at startup).")
-        return
     asyncio.run(run_async_migrations())
 
 
