@@ -1,3 +1,4 @@
+import sys
 from services.agent.code_execution import CodeExecutionAgent
 
 
@@ -11,6 +12,10 @@ def test_code_execution_uses_subprocess_sandbox_for_basic_code():
     finally:
         pop_sandbox_backend_override(token)
 
+    if sys.platform == "win32":
+        assert result["success"] is False
+        assert "资源限制" in result["error"]
+        return
     assert result["success"] is True
     assert result["output"].strip() == "6"
     assert result["backend"] == "process"

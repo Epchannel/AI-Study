@@ -1,7 +1,6 @@
 import os
 import sys
 
-import httpx
 import pytest
 
 os.environ.setdefault("PYTEST_VERSION", "1")
@@ -18,6 +17,8 @@ if API_DIR not in sys.path:
 @pytest.fixture
 def block_unmocked_cloud_requests(monkeypatch):
     """Unit tests must mock cloud HTTP instead of using configured credentials."""
+    import httpx
+
     original = httpx.AsyncHTTPTransport.handle_async_request
 
     async def offline_request(self, request):

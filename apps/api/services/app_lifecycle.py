@@ -39,7 +39,7 @@ async def _maybe_seed_system_data() -> None:
 
     async with async_session() as db:
         await seed_builtin_templates(db)
-        created = await seed_demo_course(db)
+        created = await seed_demo_course(db) if settings.app_auto_seed_demo else False
         await db.commit()
     logger.info("Seeded built-in templates")
     if created:

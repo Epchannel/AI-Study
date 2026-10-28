@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     # Runtime bootstrap
     app_auto_create_tables: bool = True
     app_auto_seed_system: bool = True
+    app_auto_seed_demo: bool = True
     app_run_scheduler: bool = False
     app_run_activity_engine: bool = False
     ambient_monitor_enabled: bool = True
@@ -111,7 +112,7 @@ class Settings(BaseSettings):
     workspace_max_size_mb: int = 500
 
     # Code sandbox
-    code_sandbox_backend: str = "auto"  # container | auto | process
+    code_sandbox_backend: str = "auto"  # disabled | container | auto | process
     code_sandbox_runtime: str = "docker"  # docker | podman
     code_sandbox_timeout_seconds: int = 5
     allow_insecure_process_sandbox: bool = False  # Allows raw subprocess sandbox (no container isolation)

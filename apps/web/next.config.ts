@@ -24,6 +24,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  ...(process.env.OPENTUTOR_PACKAGE === "1" ? {output: "standalone" as const} : {}),
   outputFileTracingRoot: path.join(__dirname, "..", ".."),
   turbopack: {
     root: path.join(__dirname, "..", ".."),

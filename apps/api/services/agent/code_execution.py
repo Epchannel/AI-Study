@@ -68,15 +68,20 @@ def _container_runtime_available() -> bool:
         return False
 
 
+def process_runtime_available() -> bool:
+    """The resource-limited subprocess runner requires POSIX facilities."""
+    return sys.platform != "win32"
+
+
 def sandbox_runtime_available() -> bool:
     """Return whether current sandbox policy has an executable runtime."""
     backend = get_effective_sandbox_backend()
     if backend == "process":
-        return process_sandbox_allowed()
+        return process_sandbox_allowed() and process_runtime_available()
     if backend == "container":
         return _container_runtime_available()
     if backend == "auto":
-        return _container_runtime_available() or process_sandbox_allowed()
+        return _container_runtime_available() or (process_sandbox_allowed() and process_runtime_available())
     return False
 
 
@@ -235,6 +240,9 @@ class CodeExecutionAgent(BaseAgent):
 
     def _execute_in_process_sandbox(self, code: str) -> dict:
         """Execute code in an isolated subprocess with resource limits."""
+        if not process_runtime_available():
+            return {"success": False, "output": "", "backend": "process",
+                    "error": "当前系统不支持受资源限制的进程沙箱；请在自己的开发工具中运行代码。"}
         runner_path = Path(__file__).with_name("sandbox_runner.py")
         payload = json.dumps({"code": code})
 
@@ -291,6 +299,10 @@ class CodeExecutionAgent(BaseAgent):
         """Execute code in the configured sandbox backend."""
         backend = get_effective_sandbox_backend()
         runner_path = Path(__file__).with_name("sandbox_runner.py")
+
+        if backend == "disabled":
+            return {"success": False, "output": "", "backend": "disabled",
+                    "error": "当前模式提供代码审阅，不在应用内运行代码；请在自己的开发工具中运行。"}
 
         if backend == "process":
             if not process_sandbox_allowed():

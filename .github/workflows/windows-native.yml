@@ -1,0 +1,67 @@
+name: Windows native support
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-native:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          architecture: x64
+      - name: Install isolated build and audit tools
+        shell: pwsh
+        run: |
+          python -m venv .venv-build
+          .venv-build/Scripts/python.exe -m pip install pip-audit==2.10.1 pytest packaging
+      - name: Audit exact Windows lock before setup
+        shell: pwsh
+        run: .venv-build/Scripts/python.exe scripts/audit-windows-lock.py
+      - name: Check repository paths and patched dependency constraints
+        shell: pwsh
+        run: .venv-build/Scripts/python.exe -m pytest tests/test_windows_repository_contract.py tests/test_windows_lock.py tests/test_windows_package_runtime.py -q -o addopts=
+      - name: Setup from clean Windows checkout
+        shell: pwsh
+        run: |
+          python scripts/native-setup.py --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/native-setup.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          apps/api/.venv-win/Scripts/python.exe -m pip check
+      - name: Runtime regressions and real start stop restart
+        shell: pwsh
+        env:
+          RUN_WINDOWS_NATIVE_SMOKE: '1'
+          DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
+          CODE_SANDBOX_BACKEND: disabled
+        run: |
+          apps/api/.venv-win/Scripts/python.exe -m pip install pytest
+          apps/api/.venv-win/Scripts/python.exe -m pytest tests/test_native_init.py tests/test_native_cleanup.py tests/test_source_bundle_privacy.py tests/test_native_mode.py tests/test_native_api_import.py tests/test_windows_native_flow.py -q -o addopts=
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-native-log-archive.ps1
+      - name: Stop owned services
+        if: always()
+        shell: pwsh
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/native-control.ps1 -Action Stop -NoBrowser
+      - name: Upload audit and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-native-verification
+          path: |
+            source-release/windows-lock-audit.json
+            native-data/logs/
+          if-no-files-found: warn

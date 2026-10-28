@@ -112,6 +112,9 @@ async def get_health_status() -> dict[str, Any]:
         sandbox_available=sandbox_available,
     )
 
+    if settings.code_sandbox_backend == "disabled":
+        local_beta_warnings = [item for item in local_beta_warnings if item != "sandbox_runtime_unavailable"]
+
     # Runtime metrics
     from middleware.metrics import get_metrics
     runtime_metrics = get_metrics()
