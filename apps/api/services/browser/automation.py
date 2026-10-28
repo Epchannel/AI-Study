@@ -10,7 +10,9 @@ Reference: spec Phase 3 — 3-layer browser cascade.
 
 import asyncio
 import logging
+from http.cookiejar import eff_request_host
 from urllib.parse import urljoin, urlparse
+from urllib.request import Request
 
 from libs.exceptions import ValidationError
 
@@ -36,7 +38,7 @@ async def _guard_browser_request(route, request) -> None:
     try:
         await _validate_public_url(request.url)
     except (ValidationError, ValueError) as exc:
-        logger.warning("Blocked unsafe browser request to %s: %s", request.url, exc)
+        logger.warning("Blocked unsafe browser request (%s)", type(exc).__name__)
         await route.abort("blockedbyclient")
         return
     await route.continue_()
@@ -52,7 +54,7 @@ def _guard_scrapling_request(route, request) -> None:
 
         validate_url(request.url)
     except (ValidationError, ValueError) as exc:
-        logger.warning("Blocked unsafe Scrapling request to %s: %s", request.url, exc)
+        logger.warning("Blocked unsafe Scrapling request (%s)", type(exc).__name__)
         route.abort("blockedbyclient")
         return
     route.continue_()
@@ -68,21 +70,36 @@ async def fetch_with_httpx(url: str, cookies: dict | None = None) -> str | None:
     try:
         await _validate_public_url(url)
     except (ValidationError, ValueError) as e:
-        logger.warning("URL validation failed for %s: %s", url, e)
+        logger.warning("URL validation failed (%s)", type(e).__name__)
         return None
     try:
         import httpx
 
         async with httpx.AsyncClient(follow_redirects=False, timeout=15) as client:
             current_url = url
-            for _ in range(_MAX_REDIRECTS + 1):
-                response = await client.get(current_url, cookies=cookies)
+            cookie_jars = {}
+            for hop in range(_MAX_REDIRECTS + 1):
+                target = httpx.URL(current_url)
+                origin = (target.scheme, target.host, target.port)
+                if origin not in cookie_jars:
+                    cookie_jars[origin] = httpx.Cookies()
+                    if hop == 0 and cookies:
+                        # Match the stdlib cookie jar's host normalization,
+                        # including IDNA and bracketed IPv6 hosts.
+                        domain = eff_request_host(Request(str(target)))[1]
+                        for name, value in cookies.items():
+                            cookie_jars[origin].set(
+                                name, value, domain=domain, path="/"
+                            )
+                # Keep both supplied and response cookies within one origin.
+                # The jar still handles Set-Cookie rotation, expiry and paths.
+                client.cookies = cookie_jars[origin]
+                response = await client.get(current_url)
+                cookie_jars[origin] = client.cookies
                 if response.status_code == 200:
                     return response.text
                 if not response.is_redirect:
-                    logger.debug(
-                        "httpx returned %s for %s", response.status_code, current_url
-                    )
+                    logger.debug("httpx returned status %s", response.status_code)
                     return None
                 location = response.headers.get("location")
                 if not location:
@@ -92,13 +109,13 @@ async def fetch_with_httpx(url: str, cookies: dict | None = None) -> str | None:
                     await _validate_public_url(current_url)
                 except (ValidationError, ValueError) as exc:
                     logger.warning(
-                        "Blocked unsafe HTTP redirect to %s: %s", current_url, exc
+                        "Blocked unsafe HTTP redirect (%s)", type(exc).__name__
                     )
                     return None
-            logger.warning("HTTP redirect limit exceeded for %s", url)
+            logger.warning("HTTP redirect limit exceeded")
             return None
     except (httpx.HTTPError, OSError) as e:
-        logger.debug("httpx failed for %s: %s", url, e)
+        logger.debug("httpx failed (%s)", type(e).__name__)
         return None
 
 
@@ -111,7 +128,7 @@ async def fetch_with_scrapling(url: str) -> str | None:
     try:
         await _validate_public_url(url)
     except (ValidationError, ValueError) as exc:
-        logger.warning("URL validation failed for %s: %s", url, exc)
+        logger.warning("URL validation failed (%s)", type(exc).__name__)
         return None
     try:
         from scrapling import StealthyFetcher
@@ -122,13 +139,13 @@ async def fetch_with_scrapling(url: str) -> str | None:
         )
         if page.status == 200:
             return page.get_all_text() or page.html_content
-        logger.debug(f"Scrapling returned status {page.status} for {url}")
+        logger.debug("Scrapling returned status %s", page.status)
         return None
     except ImportError:
         logger.debug("Scrapling not installed. Run: pip install scrapling")
         return None
     except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
-        logger.warning("Scrapling failed for %s: %s", url, e)
+        logger.warning("Scrapling failed (%s)", type(e).__name__)
         return None
 
 
@@ -147,9 +164,10 @@ async def fetch_with_browser(
     try:
         await _validate_public_url(url)
     except (ValidationError, ValueError) as e:
-        logger.warning("URL validation failed for %s: %s", url, e)
+        logger.warning("URL validation failed (%s)", type(e).__name__)
         return None
     try:
+        from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import async_playwright
         from services.browser.session_manager import SessionManager
 
@@ -194,11 +212,17 @@ async def fetch_with_browser(
             "&& playwright install"
         )
         return None
-    except (OSError, RuntimeError, ConnectionError, TimeoutError):
-        logger.exception("Browser automation failed for %s", url)
-        return None
-    except Exception:
-        logger.exception("Browser automation failed for %s", url)
+    except (
+        OSError,
+        RuntimeError,
+        ConnectionError,
+        TimeoutError,
+        PlaywrightError,
+        ValueError,
+        KeyError,
+        TypeError,
+    ) as exc:
+        logger.error("Browser automation failed (%s)", type(exc).__name__)
         return None
 
 

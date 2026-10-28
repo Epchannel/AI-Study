@@ -1,7 +1,6 @@
 """Regression tests for the browser tool's outbound navigation sandbox."""
 
 from types import SimpleNamespace
-from typing import ClassVar
 
 import pytest
 from services.browser import automation
@@ -85,25 +84,15 @@ def test_scrapling_route_aborts_private_redirect_target(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_http_redirect_is_validated_before_following(monkeypatch):
-    requested = []
+async def test_http_redirect_is_validated_before_following(monkeypatch, mock_http):
+    import httpx
+
+    requested, _ = mock_http(
+        [
+            httpx.Response(302, headers={"location": "http://127.0.0.1/metadata"}),
+        ]
+    )
     validated = []
-
-    class _Response:
-        status_code = 302
-        is_redirect = True
-        headers: ClassVar = {"location": "http://127.0.0.1/metadata"}
-
-    class _Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-        async def get(self, url, cookies=None):
-            requested.append((url, cookies))
-            return _Response()
 
     async def validate(url: str) -> None:
         validated.append(url)
@@ -111,11 +100,214 @@ async def test_http_redirect_is_validated_before_following(monkeypatch):
             raise ValueError("private address")
 
     monkeypatch.setattr(automation, "_validate_public_url", validate)
-    monkeypatch.setattr("httpx.AsyncClient", lambda **_kwargs: _Client())
-
     assert (
         await automation.fetch_with_httpx("https://example.com", {"session": "x"})
         is None
     )
-    assert requested == [("https://example.com", {"session": "x"})]
+    assert len(requested) == 1
+    assert requested[0].headers["cookie"] == "session=x"
     assert validated == ["https://example.com", "http://127.0.0.1/metadata"]
+
+
+@pytest.fixture
+def mock_http(monkeypatch):
+    """Exercise real HTTPX redirect/cookie behavior without DNS or network I/O."""
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    original_client = httpx.AsyncClient
+    validate = AsyncMock()
+    monkeypatch.setattr(automation, "_validate_public_url", validate)
+
+    def install(responses):
+        requested = []
+
+        def handler(request):
+            requested.append(request)
+            return responses[len(requested) - 1]
+
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda **kwargs: original_client(
+                transport=httpx.MockTransport(handler), **kwargs
+            ),
+        )
+        return requested, validate
+
+    return install
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "https://other.example/landing",
+        "https://sub.source.example/landing",
+        "http://source.example/landing",
+        "https://source.example:444/landing",
+    ],
+)
+async def test_http_redirect_does_not_forward_session_to_other_origins(
+    mock_http, destination
+):
+    import httpx
+
+    requested, validated = mock_http(
+        [
+            httpx.Response(302, headers={"location": destination}),
+            httpx.Response(200, text="landing"),
+        ]
+    )
+    assert (
+        await automation.fetch_with_httpx(
+            "https://source.example/start", {"session": "synthetic-secret"}
+        )
+        == "landing"
+    )
+    assert requested[0].headers["cookie"] == "session=synthetic-secret"
+    assert "cookie" not in requested[1].headers
+    assert [call.args[0] for call in validated.call_args_list] == [
+        "https://source.example/start",
+        destination,
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url,location",
+    [
+        ("https://source.example/start", "/next"),
+        ("https://source.example/start", "https://SOURCE.example:443/next"),
+        ("https://8.8.8.8/start", "/next"),
+        ("https://[2606:4700::1111]/start", "/next"),
+        ("https://xn--bcher-kva.example/start", "/next"),
+    ],
+)
+async def test_http_redirect_keeps_session_on_same_origin(mock_http, url, location):
+    import httpx
+
+    requested, _ = mock_http(
+        [
+            httpx.Response(302, headers={"location": location}),
+            httpx.Response(200, text="authenticated"),
+        ]
+    )
+    assert (
+        await automation.fetch_with_httpx(url, {"session": "synthetic-secret"})
+        == "authenticated"
+    )
+    assert [request.headers.get("cookie") for request in requested] == [
+        "session=synthetic-secret"
+    ] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "set_cookie,expected",
+    [
+        ("session=rotated; Path=/; Secure", "session=rotated"),
+        ("session=; Max-Age=0; Path=/", None),
+    ],
+)
+async def test_http_redirect_respects_session_rotation_and_deletion(
+    mock_http, set_cookie, expected
+):
+    import httpx
+
+    requested, _ = mock_http(
+        [
+            httpx.Response(
+                302, headers={"location": "/next", "set-cookie": set_cookie}
+            ),
+            httpx.Response(200, text="done"),
+        ]
+    )
+    assert (
+        await automation.fetch_with_httpx(
+            "https://source.example/start", {"session": "original"}
+        )
+        == "done"
+    )
+    assert requested[1].headers.get("cookie") == expected
+
+
+@pytest.mark.asyncio
+async def test_http_redirect_isolates_response_cookies_and_restores_returning_origin(
+    mock_http,
+):
+    import httpx
+
+    requested, _ = mock_http(
+        [
+            httpx.Response(
+                302,
+                headers={
+                    "location": "https://other.example/start",
+                    "set-cookie": "session=rotated; Path=/",
+                },
+            ),
+            httpx.Response(
+                302,
+                headers={
+                    "location": "/next",
+                    "set-cookie": "session=other-session; Path=/",
+                },
+            ),
+            httpx.Response(302, headers={"location": "https://source.example/finish"}),
+            httpx.Response(200, text="done"),
+        ]
+    )
+    assert (
+        await automation.fetch_with_httpx(
+            "https://source.example/start", {"session": "original"}
+        )
+        == "done"
+    )
+    assert [request.headers.get("cookie") for request in requested] == [
+        "session=original",
+        None,
+        "session=other-session",
+        "session=rotated",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_http_redirect_limit_and_validation_are_preserved(mock_http):
+    import httpx
+
+    requested, validated = mock_http(
+        [
+            httpx.Response(302, headers={"location": f"/hop-{i}"})
+            for i in range(automation._MAX_REDIRECTS + 1)
+        ]
+    )
+    assert (
+        await automation.fetch_with_httpx(
+            "https://source.example/start", {"session": "synthetic"}
+        )
+        is None
+    )
+    assert len(requested) == automation._MAX_REDIRECTS + 1
+    assert validated.await_count >= len(requested)
+
+
+@pytest.mark.asyncio
+async def test_blocked_redirect_does_not_log_session_url(
+    monkeypatch, mock_http, caplog
+):
+    import httpx
+
+    destination = "http://127.0.0.1/private-path?session=synthetic-secret"
+    requested, _ = mock_http([httpx.Response(302, headers={"location": destination})])
+
+    async def validate(url):
+        if url == destination:
+            raise ValueError(f"blocked {url}")
+
+    monkeypatch.setattr(automation, "_validate_public_url", validate)
+    assert await automation.fetch_with_httpx("https://source.example/start") is None
+    assert len(requested) == 1
+    assert "Blocked unsafe HTTP redirect" in caplog.text
+    assert "private-path" not in caplog.text and "synthetic-secret" not in caplog.text
