@@ -1,4 +1,5 @@
 """Tests for LOOM knowledge graph DAG validation (cycle detection + repair)."""
+import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -164,9 +165,10 @@ async def test_validate_graph_detects_cycle_without_repair():
 
 
 @pytest.mark.asyncio
-async def test_validate_graph_repair_deletes_weakest_edge():
+async def test_validate_graph_repair_deletes_weakest_edge(caplog):
     aid, bid = _ids(2)
-    nodes = [_node("A", aid), _node("B", bid)]
+    private_name = "Private concept\r\nFORGED log"
+    nodes = [_node(private_name, aid), _node("B", bid)]
     weak = _edge(bid, aid, weight=0.4)
     db = AsyncMock()
     db.execute = AsyncMock(side_effect=[_scalars(nodes), _scalars([_edge(aid, bid), weak])])
@@ -175,16 +177,22 @@ async def test_validate_graph_repair_deletes_weakest_edge():
     assert result["is_dag"] is False
     db.delete.assert_awaited_once_with(weak)
     db.flush.assert_awaited()
+    assert result["removed_edges"][0]["target"] == private_name
+    assert "Broke 1 circular" in caplog.text
+    assert "Private concept" not in caplog.text and "FORGED" not in caplog.text
 
 
 # ── extraction integration: cycles broken before commit ──
 
 @pytest.mark.asyncio
-async def test_extract_breaks_circular_prerequisites():
+@pytest.mark.parametrize("first_name", ["Limit", "Private concept\r\nFORGED log"])
+async def test_extract_breaks_circular_prerequisites(caplog, first_name):
     db = AsyncMock(); cid = uuid.uuid4()
     cn = MagicMock(); cn.content = "A" * 300; cn.title = "Calc"
-    resp = ('[{"name":"Limit","description":"x","prerequisites":["Derivative"],"related":[],"bloom_level":"understand"},'
-            '{"name":"Derivative","description":"y","prerequisites":["Limit"],"related":[],"bloom_level":"apply"}]')
+    resp = json.dumps([
+        {"name": first_name, "description": "x", "prerequisites": ["Derivative"], "related": [], "bloom_level": "understand"},
+        {"name": "Derivative", "description": "y", "prerequisites": [first_name], "related": [], "bloom_level": "apply"},
+    ])
 
     def _scalar(v):
         r = MagicMock(); r.scalar.return_value = v; return r
@@ -209,6 +217,9 @@ async def test_extract_breaks_circular_prerequisites():
     assert db.expunge.call_count == 1
     dropped = db.expunge.call_args[0][0]
     assert dropped.relation_type == "prerequisite"
+    assert "Broke 1 circular" in caplog.text
+    assert first_name not in caplog.text and "Derivative" not in caplog.text
+    assert "FORGED" not in caplog.text
 
 
 @pytest.mark.asyncio

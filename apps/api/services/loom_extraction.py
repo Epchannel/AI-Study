@@ -411,14 +411,9 @@ async def extract_course_concepts(
         for edge in broken:
             db.expunge(edge)
         if broken:
-            node_name_by_id = {n.id: n.name for n in nodes}
             logger.warning(
-                "Broke %d circular prerequisite link(s) for course %s: %s",
+                "Broke %d circular prerequisite link(s) for course %s",
                 len(broken), course_id,
-                [
-                    f"{node_name_by_id.get(e.source_id)} -> {node_name_by_id.get(e.target_id)}"
-                    for e in broken
-                ],
             )
 
     await db.commit()

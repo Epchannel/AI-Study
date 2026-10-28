@@ -368,9 +368,8 @@ async def validate_graph(
             await db.delete(edge)
         await db.flush()
         logger.warning(
-            "Broke %d circular prerequisite link(s) for course %s: %s",
+            "Broke %d circular prerequisite link(s) for course %s",
             len(to_remove), course_id,
-            ["{} -> {}".format(r["source"], r["target"]) for r in removed],
         )
 
     return {

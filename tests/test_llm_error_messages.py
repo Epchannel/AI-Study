@@ -99,6 +99,26 @@ def test_diagnostics_hide_credentials_and_request_content(caplog, cause, categor
         assert private not in combined
 
 
+@pytest.mark.parametrize("cause", ["timed out", "model not found"])
+def test_circuit_logs_do_not_include_user_controlled_diagnostics(caplog, cause):
+    client = _FakeClient()
+    client.provider_name = "private-provider\r\nFORGED provider log"
+    client.model = "private-model\r\nFORGED model log"
+    client.base_url = "https://private-host.example/v1"
+    for _ in range(3):
+        client.mark_unhealthy(cause)
+    client._circuit_open_time = 0
+    with caplog.at_level("INFO"):
+        assert client.is_healthy
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Circuit OPEN" in message for message in messages)
+    assert any("reset" in message for message in messages)
+    assert any("category:" in message for message in messages)
+    for message in messages:
+        assert "\r" not in message and "\n" not in message
+        assert "private-" not in message and "FORGED" not in message
+
+
 # ── Circuit breaker integration ──
 
 class _FakeClient(CircuitBreakerMixin):
