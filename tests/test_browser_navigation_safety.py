@@ -127,13 +127,11 @@ def mock_http(monkeypatch):
             requested.append(request)
             return responses[len(requested) - 1]
 
-        monkeypatch.setattr(
-            httpx,
-            "AsyncClient",
-            lambda **kwargs: original_client(
-                transport=httpx.MockTransport(handler), **kwargs
-            ),
-        )
+        def client_factory(**kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            return original_client(**kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", client_factory)
         return requested, validate
 
     return install

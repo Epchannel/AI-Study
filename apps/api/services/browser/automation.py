@@ -75,7 +75,14 @@ async def fetch_with_httpx(url: str, cookies: dict | None = None) -> str | None:
     try:
         import httpx
 
-        async with httpx.AsyncClient(follow_redirects=False, timeout=15) as client:
+        from services.browser.public_http import PublicHTTPTransport
+
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=15,
+            transport=PublicHTTPTransport(),
+            trust_env=False,
+        ) as client:
             current_url = url
             cookie_jars = {}
             for hop in range(_MAX_REDIRECTS + 1):
