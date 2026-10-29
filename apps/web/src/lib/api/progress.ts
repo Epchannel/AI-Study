@@ -1,4 +1,5 @@
 import { request } from "./client";
+import { getFeatureFlags } from "./features";
 
 // ── Course Progress ──
 
@@ -231,6 +232,9 @@ export async function getReviewSession(
   courseId: string,
   maxItems = 10,
 ): Promise<ReviewSession> {
+  if (!(await getFeatureFlags()).lector) {
+    return { course_id: courseId, items: [], count: 0 };
+  }
   return request(`/progress/courses/${courseId}/review-session?max_items=${maxItems}`);
 }
 

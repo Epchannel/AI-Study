@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # Generic OpenAI-compatible endpoint
     custom_llm_api_key: str = ""
+    api_hnq_key: str = ""
     custom_llm_base_url: str = ""
     custom_llm_model: str = ""
 

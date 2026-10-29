@@ -1,4 +1,5 @@
 import { request } from "./client";
+import { ttlCache } from "@/lib/cache";
 
 export interface FeatureFlags {
   loom: boolean;
@@ -9,6 +10,18 @@ export interface FeatureFlags {
   notion_export: boolean;
 }
 
+let pendingFlags: Promise<FeatureFlags> | undefined;
+
 export async function getFeatureFlags(): Promise<FeatureFlags> {
-  return request<FeatureFlags>("/features");
+  const cached = ttlCache.get<FeatureFlags>("api:features");
+  if (cached) return cached;
+  if (!pendingFlags) {
+    pendingFlags = request<FeatureFlags>("/features")
+      .then((flags) => {
+        ttlCache.set("api:features", flags, 30_000);
+        return flags;
+      })
+      .finally(() => { pendingFlags = undefined; });
+  }
+  return pendingFlags;
 }

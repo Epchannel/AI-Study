@@ -1,6 +1,8 @@
 """SQLAlchemy ORM models — import all to register with Base.metadata."""
 
 from models.user import User
+from models.academy import (AcademyProfile, Classroom, Enrollment, Material, AcademyThread,
+                            LearningAsset, AcademyAttempt, AcademyCard, AcademySchedule, LearningEvent, ClassroomAttendance)
 from models.course import Course
 from models.content import CourseContentTree
 from models.preference import UserPreference, PreferenceSignal

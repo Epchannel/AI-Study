@@ -1,4 +1,5 @@
 import { request } from "./client";
+import { getFeatureFlags } from "./features";
 
 import type { GeneratedBatchSummaryBase, JsonObject, SavedGeneratedAsset } from "./client";
 
@@ -319,6 +320,9 @@ export interface LectorOrderResult {
 export async function getLectorOrderedFlashcards(
   courseId: string,
 ): Promise<LectorOrderResult> {
+  if (!(await getFeatureFlags()).lector) {
+    return { cards: [], count: 0, lector_concepts: 0 };
+  }
   return request(`/flashcards/lector-order/${courseId}`);
 }
 

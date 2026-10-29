@@ -25,14 +25,14 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "OpenTutor Zenus — Personalized Learning Agent",
-  description: "Upload any learning material, get a personalized study space with AI notes, quizzes, and chat.",
-  applicationName: "OpenTutor Zenus",
+  title: "Học Cùng — Giáo viên AI & Định hướng tương lai",
+  description: "Học từ căn bản đến nâng cao, luyện quiz, ôn flashcard và xây dựng lịch học cùng giáo viên AI. Học liệu được giảng viên kiểm duyệt.",
+  applicationName: "Học Cùng",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "OpenTutor Zenus",
+    title: "Học Cùng",
   },
   icons: {
     icon: [
@@ -49,7 +49,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning className={spaceGrotesk.variable}>
+    <html lang="vi" suppressHydrationWarning className={spaceGrotesk.variable}>
       <body className="antialiased">
         <a
           href="#main-content"

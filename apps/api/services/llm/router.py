@@ -334,9 +334,14 @@ def _build_registry() -> ProviderRegistry:
 
     # --- Generic OpenAI-compatible endpoint ---
     if settings.custom_llm_base_url:
-        client = OpenAIClient(
-            settings.custom_llm_api_key or "none",
-            settings.custom_llm_model or model,
+        from urllib.parse import urlparse
+        from services.llm.providers.hnq_client import HNQClient
+
+        is_hnq = urlparse(settings.custom_llm_base_url).hostname == "apihnq.hnquan.com"
+        client_class = HNQClient if is_hnq else OpenAIClient
+        client = client_class(
+            settings.custom_llm_api_key or (settings.api_hnq_key if is_hnq else "") or "none",
+            settings.custom_llm_model or ("" if is_hnq else model),
             base_url=settings.custom_llm_base_url, name="custom",
         )
         registry.register("custom", client, primary=(provider == "custom"))

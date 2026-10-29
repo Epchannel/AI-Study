@@ -94,7 +94,7 @@ class OpenAIClient(LLMClient):
             }
             if self._supports_stream_options:
                 create_kwargs["stream_options"] = {"include_usage": True}
-            stream = await self.client.chat.completions.create(**create_kwargs)
+            stream = await self._create_completion(**create_kwargs)
             marked_healthy = False
             async for chunk in stream:
                 if chunk.usage:
@@ -117,7 +117,7 @@ class OpenAIClient(LLMClient):
     async def chat(self, system_prompt: str, user_message: str, images: list[dict] | None = None) -> tuple[str, dict]:
         try:
             user_content = _build_openai_user_content(user_message, images)
-            response = await self.client.chat.completions.create(
+            response = await self._create_completion(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -154,7 +154,7 @@ class OpenAIClient(LLMClient):
             tool_calls: [{"id": str, "name": str, "arguments": dict}, ...]
         """
         try:
-            response = await self.client.chat.completions.create(
+            response = await self._create_completion(
                 model=self.model,
                 messages=messages,
                 tools=tools,
@@ -191,3 +191,6 @@ class OpenAIClient(LLMClient):
     async def extract(self, system_prompt: str, user_message: str) -> tuple[str, dict]:
         """Lightweight extraction (openakita's think_lightweight pattern)."""
         return await self.chat(system_prompt, user_message)
+
+    async def _create_completion(self, **kwargs):
+        return await self.client.chat.completions.create(**kwargs)

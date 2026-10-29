@@ -24,6 +24,10 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  experimental: {
+    proxyTimeout: 960_000,
+    proxyClientMaxBodySize: "30mb",
+  },
   ...(process.env.OPENTUTOR_PACKAGE === "1" ? {output: "standalone" as const} : {}),
   outputFileTracingRoot: path.join(__dirname, "..", ".."),
   turbopack: {

@@ -66,6 +66,8 @@ def _include_router(app: FastAPI, router, prefix: str | None = None, tags: list[
 
 
 def register_routers(app: FastAPI) -> None:
+    from routers.academy import router as academy_router
+    _include_router(app, academy_router)
     if settings.auth_enabled:
         _include_router(app, auth.router, prefix="/api/auth", tags=["auth"])
 

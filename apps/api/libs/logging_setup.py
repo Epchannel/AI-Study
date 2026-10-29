@@ -112,7 +112,7 @@ def configure_logging() -> None:
     root.setLevel(log_level)
 
     # Quiet noisy third-party loggers
-    for noisy in ("uvicorn.access", "httpcore", "httpx", "openai", "anthropic"):
+    for noisy in ("uvicorn.access", "httpcore", "httpx", "openai", "anthropic", "aiosqlite"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     # Add file handler if configured
