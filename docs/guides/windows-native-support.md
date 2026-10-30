@@ -1,5 +1,7 @@
 # Windows native installation and startup support
 
+> For the currently deployed Học Cùng instance, see [Windows VPS and Cloudflare Tunnel](windows-vps-cloudflare.md). Its private runtime helpers and port 3003 differ from the source/native setup below. The PR verification results below are historical.
+
 This PR adds Windows packaging and process management. It does not change AI teaching prompts, layouts, grading, notes, or upstream Docker defaults. Both review PRs start independently from upstream main at `039bfb9102f1aafc7fcc617a1f5a0ff7ae478613`.
 
 ## Supported targets and actual verification

@@ -1,5 +1,15 @@
 # Học Cùng AI implementation
 
+## Deployed image-chat follow-up — 2026-10-30
+
+The public Academy now runs at https://chatbotvido.io.vn through a Windows VPS and Cloudflare Tunnel, using HNQ `gpt-5.6-luna`. Each subsequent signup creates a separate student account. Legacy workspace APIs are blocked on the public domain. See [deployment operations](guides/windows-vps-cloudflare.md) and [HNQ configuration](hnq-gateway.md).
+
+Chat accepts up to three PNG/JPEG/WebP images with a message or alone, shows removable previews and preserves drafts on generation failure. The backend checks ownership, validates and normalizes images, stores private files with metadata in existing conversation JSON, and serves them through owner-authorized requests. No schema migration is required. Historical images display on reload but must be reattached for another model analysis. Before commit, interrupted generations leave no saved turn/images; after commit, durable data is retained even on disconnect. Image-based saved quiz/flashcard generation is not part of this addition.
+
+This release was deployed and its image flow exercised in Edge headless, including a real Luna response. Relevant backend assertions (40) and frontend tests (12) passed; the backend command still exited 1 because its targeted coverage did not meet the global 45% threshold. Typecheck, scoped lint and production frontend build passed. Independent review left no critical/high/medium findings. Exact evidence and remaining low-priority test gaps are in [academy-audit.md](academy-audit.md).
+
+The older sections below are implementation history. Their pending restart/browser statements refer to those earlier follow-ups. The full teacher/student/mobile checklist remains open; the narrow image-chat check does not mark the complete product delivered. See [remaining acceptance](academy-acceptance.md).
+
 Kế hoạch mở rộng quản lý giáo viên: [teacher-management-plan.md](teacher-management-plan.md).
 
 ### Điểm danh giáo viên

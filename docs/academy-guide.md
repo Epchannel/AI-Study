@@ -2,6 +2,8 @@
 
 Vietnamese learning chatbot built on OpenTutor. Open `/` for the new academy; `/workspace` preserves the previous course workspace.
 
+Public deployment: **https://chatbotvido.io.vn**. On this domain, only Academy APIs and health probes are exposed; the legacy `/workspace` API workflows are unavailable. See [Windows VPS operations](guides/windows-vps-cloudflare.md) for deployment details.
+
 ## Accounts and classroom workflow
 
 1. Register the first account to initialize the teacher. Later registrations are student accounts. There is no shared default password.
@@ -25,7 +27,25 @@ If the gateway fails, the UI explains timeout/rate-limit/access errors and displ
 
 HNQ uses upstream streaming for long structured generations too; the backend collects the stream and returns a complete result only after the terminal event. Rescheduling stores times in UTC+7 and recalculates duration; a session must stay within one day and last 1–240 whole minutes. Skipped sessions can be restored only if the slot is free. Completed sessions cannot be edited, and repeated completion does not earn extra streak activity. Manual rescheduling can use a new time outside the saved availability; automatic generation uses availability and the chosen daily budget.
 
+## Send images in chat
+
+The configured HNQ `gpt-5.6-luna` accepted image input in a live check on 2026-10-30. Availability depends on the gateway and exact model ID; changing providers/models requires checking image support again.
+
+1. In the chat composer, choose **Thêm ảnh**, select images and review the previews. Remove any unwanted image before sending.
+2. Add a question or send images alone; image-only messages use a default Vietnamese request to describe/explain the images.
+3. Send once and wait for the response. The picker is disabled during generation. On failure before successful completion, the draft and selected images remain available for correction or retry.
+
+Supported formats are **PNG, JPEG and WebP**, at most **3 images per message**, **4 MiB per file**, **8 MiB combined**, and **20 megapixels per image**. Animated, malformed or falsely labeled images are rejected; GIF and SVG are unsupported. The server applies EXIF orientation, strips metadata and re-encodes accepted images; normalized images must also meet the size limits.
+
+Attached images are sent to the configured AI provider. Avoid private student information unless appropriate for that service. Images are stored locally for private conversation history; viewing them requires the conversation owner's token. Reloading a conversation shows its images, but historical images are **not automatically sent again** to the model. Reattach an image when asking for another visual analysis. Requests for quizzes/flashcards with an attachment currently receive a normal image-chat answer, rather than creating a saved exercise from the image.
+
+An interrupted generation before durable commit saves neither the turn nor its images. Once a turn has committed, it remains saved even if the connection drops immediately afterward. If history refresh fails after success, reload the conversation before sending again to avoid duplicate generation.
+
+For integrations, `POST /api/academy/threads/{thread_id}/chat` keeps the existing JSON `{ "message": "..." }` contract and also accepts multipart `message` plus repeated `images` file fields. Private downloads use `GET /api/academy/threads/{thread_id}/images/{image_id}` with bearer authentication. Stored message metadata contains image ID, name, media type, byte size, width and height; it contains neither base64 image content nor filesystem paths. This feature requires no database schema migration.
+
 ## Run locally
+
+For the running public instance, use the [VPS guide](guides/windows-vps-cloudflare.md). The commands below are for a separate local development environment.
 
 Backend, from `apps/api`:
 

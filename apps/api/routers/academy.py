@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 import io
 import json
+import logging
 import secrets
 import uuid
 from dataclasses import asdict
@@ -14,6 +16,8 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select, func, or_, distinct
@@ -31,9 +35,12 @@ from services.auth.jwt import create_access_token, create_refresh_token, decode_
 from services.academy_errors import generate_with_error_handling, generation_error
 from services.academy import (SUBJECTS, VN, classroom_access, extract_segments, source_context,
                               teacher_prompt, parse_generation, streak_summary, build_schedule, learning_action)
+from services.academy_images import read_images, write_images, delete_images, MAX_TOTAL_BYTES
 
 router = APIRouter(prefix="/api/academy", tags=["academy"])
 bearer = HTTPBearer(auto_error=False)
+MAX_MESSAGE_BYTES = 8000 * 4
+logger = logging.getLogger(__name__)
 
 
 async def serialize_learning_write(db: AsyncSession, user: User):
@@ -402,17 +409,127 @@ async def get_thread(thread_id: uuid.UUID, user: User = Depends(account), db: As
     return row_json(await own_thread(db, thread_id, user.id))
 
 
+@router.get("/threads/{thread_id}/images/{image_id}")
+async def get_thread_image(thread_id: uuid.UUID, image_id: uuid.UUID, user: User = Depends(account), db: AsyncSession = Depends(get_db)):
+    thread = await own_thread(db, thread_id, user.id)
+    image = next((item for message in thread.data.get("messages", []) for item in message.get("images", []) if item.get("id") == str(image_id)), None)
+    if not image:
+        raise HTTPException(404, "Không tìm thấy ảnh.")
+    extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}.get(image.get("media_type"))
+    if not extension:
+        raise HTTPException(404, "Không tìm thấy ảnh.")
+    path = (Path(settings.upload_dir).resolve() / "academy-chat-images" / str(user.id) / f"{image_id}.{extension}").resolve()
+    root = (Path(settings.upload_dir).resolve() / "academy-chat-images" / str(user.id)).resolve()
+    if root not in path.parents or not path.is_file():
+        raise HTTPException(404, "Không tìm thấy ảnh.")
+    return FileResponse(path, media_type=image["media_type"], headers={"Cache-Control": "private, no-store"})
+
+
 class MessageBody(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
+
+
+async def chat_payload(request: Request) -> tuple[MessageBody, list[UploadFile]]:
+    """Parse JSON unchanged, or cap multipart bytes before Starlette spools files."""
+    if not request.headers.get("content-type", "").startswith("multipart/form-data"):
+        try:
+            return MessageBody.model_validate(await request.json()), []
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(422, "Tin nhắn không hợp lệ.") from exc
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > MAX_TOTAL_BYTES + 65536:
+                raise HTTPException(413, "Ảnh vượt quá dung lượng cho phép.")
+        except ValueError as exc:
+            raise HTTPException(400, "Content-Length không hợp lệ.") from exc
+    consumed = 0
+    async def bounded_stream():
+        nonlocal consumed
+        async for chunk in request.stream():
+            consumed += len(chunk)
+            if consumed > MAX_TOTAL_BYTES + 65536:
+                raise HTTPException(413, "Ảnh vượt quá dung lượng cho phép.")
+            yield chunk
+    parser = MultiPartParser(request.headers, bounded_stream(), max_files=3, max_fields=2, max_part_size=MAX_MESSAGE_BYTES)
+    uploads: list[StarletteUploadFile] = []
+
+    async def close_uploads() -> None:
+        for upload in uploads:
+            await upload.close()
+        for file in parser._files_to_close_on_error:
+            file.close()
+
+    try:
+        form = await parser.parse()
+        entries = list(form.multi_items())
+        uploads = [value for _, value in entries if isinstance(value, StarletteUploadFile)]
+        message_entries = [value for key, value in entries if key == "message"]
+        images = [value for key, value in entries if key == "images"]
+        if (
+            any(key not in {"message", "images"} for key, _ in entries)
+            or len(message_entries) > 1
+            or any(not isinstance(value, str) for value in message_entries)
+            or any(not isinstance(item, StarletteUploadFile) for item in images)
+        ):
+            raise HTTPException(422, "Tệp đính kèm không hợp lệ.")
+        message = message_entries[0] if message_entries else ""
+        if not message.strip() and images:
+            message = "Hãy mô tả và giải thích nội dung trong ảnh này bằng tiếng Việt."
+        return MessageBody(message=message), list(images)
+    except (MultiPartException, ValueError) as exc:
+        await close_uploads()
+        raise HTTPException(422, "Dữ liệu ảnh không hợp lệ.") from exc
+    except BaseException:
+        await close_uploads()
+        raise
 
 
 _chat_locks: set[uuid.UUID] = set()
 
 
+async def commit_chat_images(session: AsyncSession) -> None:
+    """Resolve a commit before allowing cancellation to leave its durability ambiguous."""
+    task = asyncio.create_task(session.commit())
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        task.result()
+        raise
+
+
+async def image_references_persisted(thread_id: uuid.UUID, user_id: uuid.UUID, image_ids: set[str]) -> bool | None:
+    """Return False only for a confirmed absent durable write; unknown outcomes retain private files."""
+    try:
+        async with async_session() as session:
+            thread = await own_thread(session, thread_id, user_id)
+            references = {
+                str(image.get("id"))
+                for message in thread.data.get("messages", [])
+                for image in message.get("images", [])
+            }
+            return image_ids.issubset(references)
+    except Exception:
+        logger.exception("Unable to verify Academy chat image commit outcome")
+        return None
+
+
 @router.post("/threads/{thread_id}/chat")
-async def chat(thread_id: uuid.UUID, body: MessageBody, request: Request, user: User = Depends(account), db: AsyncSession = Depends(get_db)):
+async def chat(thread_id: uuid.UUID, request: Request, user: User = Depends(account), db: AsyncSession = Depends(get_db)):
     thread = await own_thread(db, thread_id, user.id)
+    # Ownership is intentionally checked before multipart parsing / Pillow work.
+    body, uploads = await chat_payload(request)
+    images = await read_images(uploads) if uploads else []
     action = learning_action(body.message)
+    if images:
+        action = None
+        if not body.message.strip():
+            body = MessageBody(message="Hãy mô tả và giải thích nội dung trong ảnh này bằng tiếng Việt.")
     if thread_id in _chat_locks:
         raise HTTPException(409, "Cuộc trò chuyện đang trả lời. Hãy dừng hoặc chờ câu trả lời hiện tại.")
     _chat_locks.add(thread_id)
@@ -424,7 +541,7 @@ async def chat(thread_id: uuid.UUID, body: MessageBody, request: Request, user: 
         from services.llm.router import get_llm_client
         client = get_llm_client()
         system = teacher_prompt(profile.data, thread.data["subject"], thread.data["mode"], context)
-        history = thread.data.get("messages", [])[-12:]
+        history = [{"role": item.get("role"), "content": item.get("content", "") + (" [đã đính kèm ảnh]" if item.get("images") else "")} for item in thread.data.get("messages", [])[-12:]]
         prompt = "Lịch sử (dữ liệu hội thoại):\n" + json.dumps(history, ensure_ascii=False) + "\nTin nhắn mới:\n" + body.message
         user_id = user.id
     except BaseException:
@@ -446,7 +563,8 @@ async def chat(thread_id: uuid.UUID, body: MessageBody, request: Request, user: 
                 yield {"event": "content", "data": json.dumps({"text": text}, ensure_ascii=False)}
                 yield {"event": "action", "data": json.dumps({"type": "asset", "id": asset_id})}
             else:
-                stream = client.stream_chat(system, prompt)
+                vision = [{"data": base64.b64encode(image.data).decode("ascii"), "media_type": image.media_type} for image in images]
+                stream = client.stream_chat(system, prompt, images=vision) if vision else client.stream_chat(system, prompt)
                 async for chunk in stream:
                     if await request.is_disconnected():
                         return
@@ -454,13 +572,30 @@ async def chat(thread_id: uuid.UUID, body: MessageBody, request: Request, user: 
                     yield {"event": "content", "data": json.dumps({"text": chunk}, ensure_ascii=False)}
             if not text.strip():
                 raise ValueError("Empty answer")
-            async with async_session() as session:
-                current = await own_thread(session, thread_id, user_id)
-                current.title = body.message[:80]
-                current.data = {**current.data, "messages": [*current.data.get("messages", []),
-                    {"role": "user", "content": body.message, "at": datetime.now(timezone.utc).isoformat()},
+            if await request.is_disconnected():
+                return
+            written = []
+            try:
+                async with async_session() as session:
+                    current = await own_thread(session, thread_id, user_id)
+                    current.title = body.message[:80]
+                    written = write_images(images, Path(settings.upload_dir).resolve(), user_id) if images else []
+                    current.data = {**current.data, "messages": [*current.data.get("messages", []),
+                    {"role": "user", "content": body.message, "images": [image.metadata() for image in images], "at": datetime.now(timezone.utc).isoformat()},
                     {"role": "assistant", "content": text, "sources": citations, "asset_id": asset_id, "at": datetime.now(timezone.utc).isoformat()}]}
-                await session.commit()
+                    await commit_chat_images(session)
+            except BaseException as exc:
+                if written:
+                    persisted = await image_references_persisted(thread_id, user_id, {image.id for image in images})
+                    if persisted is False:
+                        delete_images(written)
+                        raise
+                    elif persisted is True and not isinstance(exc, asyncio.CancelledError):
+                        pass
+                    else:
+                        raise
+                else:
+                    raise
             yield {"event": "done", "data": json.dumps({"thread_id": str(thread_id)})}
         except asyncio.CancelledError:
             raise

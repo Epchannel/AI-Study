@@ -18,6 +18,16 @@ Drop in a PDF. Get an AI tutor that actually adapts to how *you* learn.
 
 </div>
 
+## Học Cùng — this checkout
+
+This checkout also includes the Vietnamese Academy at `/`, with separate teacher/student accounts, classes and private learning history. The current deployment is **https://chatbotvido.io.vn**, using a Windows VPS and Cloudflare Tunnel. HNQ `gpt-5.6-luna` is the configured default; image input was verified on that gateway on 2026-10-30. Chat text and attached images are sent to the configured AI provider.
+
+- [Academy user guide](docs/academy-guide.md): accounts, classroom workflows and image chat.
+- [Windows VPS / Cloudflare operations](docs/guides/windows-vps-cloudflare.md): ports, ingress restrictions, restart, backup and rollback.
+- [HNQ configuration](docs/hnq-gateway.md) and [verification status](docs/academy-audit.md).
+
+The upstream OpenTutor overview and local setup below describe the original workspace. Its single-user scope and default port do not describe this public Academy deployment.
+
 <!-- TODO: Replace with demo GIF once recorded -->
 <!-- <p align="center"><img src="docs/assets/demo.gif" alt="OpenTutor demo — upload PDF, get adaptive workspace" width="800" /></p> -->
 

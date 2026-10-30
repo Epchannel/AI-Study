@@ -1,5 +1,7 @@
 # OpenTutor Deployment Guide
 
+> For this checkout's public Học Cùng deployment at `chatbotvido.io.vn`, use the [Windows VPS and Cloudflare Tunnel guide](guides/windows-vps-cloudflare.md). It documents the Academy-only API ingress, port 3003, separate accounts and current operational limits. The guide below covers the original local workspace setup.
+
 OpenTutor is a local-first, single-user AI tutoring platform. This guide covers every way to get it running on your machine.
 
 > Local deployment is **SQLite-only** in this repository.

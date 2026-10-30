@@ -1,8 +1,12 @@
 # Browser acceptance — remaining gate
 
-These checks have **not** been executed in a browser. The browser access host is unavailable; Windows Computer Use also stopped because it could not verify the active browser URL. API/component tests and build results are recorded separately in `academy-audit.md`.
+## Verified image-chat flow - 2026-10-30
 
-Open `http://127.0.0.1:3001`. Keep real student information out of acceptance fixtures. The installation owner should create the first teacher account; no persistent acceptance account has been created automatically.
+A live Edge headless check on https://chatbotvido.io.vn selected a synthetic image, displayed the preview, sent it successfully (HTTP 200), displayed the saved thumbnail and received the Luna answer: "A red square and a blue circle." The image loaded with authentication after a fresh fetch (200); an unauthenticated request returned 401. Temporary test conversation/image data was removed. Authentication was seeded using the real API and browser localStorage; this check does not prove the login form flow.
+
+The full teacher, student, small-screen and keyboard scenarios below remain pending. Earlier browser-host failures describe previous attempts, not the current status of all browser access. Automated checks and their coverage limitation are recorded in [academy-audit.md](academy-audit.md).
+
+For local acceptance open `http://127.0.0.1:3001`; for the deployed Academy use https://chatbotvido.io.vn. Keep real student information out of fixtures. On a fresh installation, the owner should create the first teacher account before public signup. Do not reuse production owner credentials for acceptance tests.
 
 ## Desktop teacher workflow
 
@@ -16,7 +20,7 @@ Open `http://127.0.0.1:3001`. Keep real student information out of acceptance fi
 
 1. Register a student, join using the code, and confirm only published class materials appear. A class not joined must be unavailable.
 2. Select the class and one document in chat. Ask a question, follow a citation/download and reload/open conversation history. Confirm source/subject/level restoration.
-3. Start a long answer and stop it. Confirm the error/status is readable and the unfinished answer is not restored from persisted history. Change the document and confirm a new conversation starts.
+3. Start a long answer and stop it before completion. Confirm the error/status is readable and the unfinished answer is not restored from persisted history. A turn already committed before a disconnect must remain saved. Change the document and confirm a new conversation starts.
 4. Take a quiz, check that submission is disabled until every answer is selected, submit and review explanation/wrong-answer history and mastery.
 5. Flip a flashcard and rate recall. Reload to confirm the next due state is retained and immediate duplicate review is prevented.
 6. Save goals, exam date and availability. Generate a schedule, reschedule a session and check the updated minutes. Complete an eligible session; repeated completion must not increase activity count.
@@ -30,3 +34,10 @@ Repeat the main flows at approximately 390×844 and 768×1024, plus a desktop wi
 Use keyboard navigation through forms and controls. Confirm visible focus, accessible field names, readable error/status messages, and that cancelling a form or closing the menu returns to the expected page.
 
 Record the browser/version, viewport, pass/fail and any reproducible defect before closing this gate. A successful HTTP response, static render or component test does not close the visual/browser gate.
+
+## Remaining image-chat acceptance
+
+- Check PNG/JPEG/WebP selection, preview/removal, image-only send and readable errors for unsupported formats and size/count limits on desktop and mobile.
+- Verify draft retention on generation failure, cancellation before commit, history reload after success and no restored draft after a post-success refresh error.
+- Reopen history, verify private image loading and test isolation with a second account. Reattach an old image for a new visual question; old images are not automatically resent.
+- Check image controls with keyboard navigation and small-screen layouts. The desktop synthetic-image smoke above does not close these broader gates.
